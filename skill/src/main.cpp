@@ -1,5 +1,115 @@
 #include "main.h"
-#include "lemlib/api.hpp"
+#include "lemlib/api.hpp" // IWYU pragma: keep
+#include "lemlib/asset.hpp"
+
+ASSET(example_txt);
+
+pros::MotorGroup
+    left_motors({-18, -19, -20},
+                pros::MotorGearset::blue); // left motors use 600 RPM cartridges
+pros::MotorGroup right_motors(
+    {1, 2, 3}, pros::MotorGearset::blue); // right motors use 200 RPM cartridges
+// drivetrain settings
+lemlib::Drivetrain drivetrain(&left_motors,               // left motor group
+                              &right_motors,              // right motor group
+                              11.25,                      // 10 inch track width
+                              lemlib::Omniwheel::NEW_275, // using new 4" omnis
+                              450, // drivetrain rpm is 360
+                              2    // horizontal drift is 2 (for now)
+);
+// create an imu on port 10
+pros::Imu imu(10);
+
+pros::Motor intake(6);
+pros::Motor hook(-11);
+pros::Motor arm(5);
+
+pros::ADIDigitalOut clamp('H');
+pros::ADIDigitalOut doinker('G');
+pros::ADIEncoder arm_encoder('A', 'B', false);
+
+// input curve for throttle input during driver control
+lemlib::ExpoDriveCurve
+    throttle_curve(3,    // joystick deadband out of 127
+                   10,   // minimum output where drivetrain will move out of 127
+                   1.019 // expo curve gain
+    );
+
+// input curve for steer input during driver control
+lemlib::ExpoDriveCurve
+    steer_curve(3,    // joystick deadband out of 127
+                10,   // minimum output where drivetrain will move out of 127
+                1.019 // expo curve gain
+    );
+
+// // lateral PID controller
+// lemlib::ControllerSettings lateral_controller(0, // proportional gain (kP)
+//                                               0, // integral gain (kI)
+//                                               0, // derivative gain (kD)
+//                                               0, // anti windup
+//                                               0, // small error range, in
+//                                               inches 0, // small error range
+//                                               timeout, in milliseconds 0, //
+//                                               large error range, in inches 0,
+//                                               // large error range timeout,
+//                                               in milliseconds 0 // maximum
+//                                               acceleration (slew)
+// );
+
+// // angular PID controller
+// lemlib::ControllerSettings angular_controller(21, // proportional gain (kP)
+//                                               0, // integral gain (kI)
+//                                               155,// derivative gain (kD)
+//                                               0, // anti windup
+//                                               0, // small error range, in
+//                                               degrees 0, // small error range
+//                                               timeout, in milliseconds 0, //
+//                                               large error range, in degrees
+//                                               0, // large error range
+//                                               timeout, in milliseconds 0 //
+//                                               maximum acceleration (slew)
+// );
+
+// lateral motion controller
+lemlib::ControllerSettings
+    lateral_controller(10,  // proportional gain (kP)
+                       0,   // integral gain (kI)
+                       3,   // derivative gain (kD)
+                       3,   // anti windup
+                       1,   // small error range, in inches
+                       100, // small error range timeout, in milliseconds
+                       3,   // large error range, in inches
+                       500, // large error range timeout, in milliseconds
+                       20   // maximum acceleration (slew)
+    );
+
+// angular motion controller
+lemlib::ControllerSettings
+    angular_controller(2,   // proportional gain (kP)
+                       0,   // integral gain (kI)
+                       10,  // derivative gain (kD)
+                       3,   // anti windup
+                       1,   // small error range, in degrees
+                       100, // small error range timeout, in milliseconds
+                       3,   // large error range, in degrees
+                       500, // large error range timeout, in milliseconds
+                       0    // maximum acceleration (slew)
+    );
+
+lemlib::OdomSensors sensors(
+    nullptr, // vertical tracking wheel 1, set to null
+    nullptr, // vertical tracking wheel 2, set to nullptr as we are using IMEs
+    nullptr, // horizontal tracking wheel 1
+    nullptr, // horizontal tracking wheel 2, set to nullptr as we don't have a
+             // second one
+    &imu);   // inertial sensor
+
+// create the chassis
+lemlib::Chassis chassis(drivetrain,         // drivetrain settings
+                        lateral_controller, // lateral PID settings
+                        angular_controller, // angular PID settings
+                        sensors, // odometry sensors (left, middle, right)
+                        &throttle_curve, &steer_curve);
 
 /**
  * A callback function for LLEMU's center button.
@@ -8,13 +118,13 @@
  * "I was pressed!" and nothing.
  */
 void on_center_button() {
-	static bool pressed = false;
-	pressed = !pressed;
-	if (pressed) {
-		pros::lcd::set_text(2, "I was pressed!");
-	} else {
-		pros::lcd::clear_line(2);
-	}
+  static bool pressed = false;
+  pressed = !pressed;
+  if (pressed) {
+    pros::lcd::set_text(2, "working");
+  } else {
+    pros::lcd::clear_line(2);
+  }
 }
 
 /**
@@ -24,10 +134,19 @@ void on_center_button() {
  * to keep execution time for this mode under a few seconds.
  */
 void initialize() {
-	pros::lcd::initialize();
-	pros::lcd::set_text(1, "Hello PROS User!");
-
-	pros::lcd::register_btn1_cb(on_center_button);
+  pros::lcd::initialize(); // initialize brain screen
+  chassis.calibrate();     // calibrate sensors
+  // print position to brain screen
+  pros::Task screen_task([&]() {
+    while (true) {
+      // print robot location to the brain screen
+      pros::lcd::print(0, "X: %f", chassis.getPose().x);         // x
+      pros::lcd::print(1, "Y: %f", chassis.getPose().y);         // y
+      pros::lcd::print(2, "Theta: %f", chassis.getPose().theta); // heading
+      // delay to save resources
+      pros::delay(20);
+    }
+  });
 }
 
 /**
@@ -59,7 +178,59 @@ void competition_initialize() {}
  * will be stopped. Re-enabling the robot will restart the task, not re-start it
  * from where it left off.
  */
-void autonomous() {}
+void autonomous() {
+  chassis.setPose(
+      0, 0, 0); // Start position: 1 tile from right edge, facing backwards
+  chassis.follow(example_txt, 15, 2000)
+}
+// void autonomous()
+// {
+// 	// Set the initial pose of the robot (x, y, heading)
+// 	// chassis.setPose(-12, -12,-40); // Start position: 1 tile from right
+// edge, facing backwards
+
+// 	// Moves the arm only
+// 	clamp.set_value(false);
+// 	arm.move(90);
+// 	pros::delay(1500);
+// 	arm.move(-90);
+// 	left_motors.move(-80);
+
+// 	// Turn to 270 and move backwards to (24, 0)
+// 	chassis.moveToPoint(-24,-24, 1000, {.forwards = false});
+// 	pros::delay(200);
+
+// 	// Clamp the mobile goal
+// 	clamp.set_value(true);
+// 	pros::delay(400);
+// 	clamp.set_value(false);
+
+// 	// Turn to 180 degrees and move forward to collect the ring
+// 	chassis.moveToPoint(-24, -48, 1000);
+// 	pros::delay(50);
+
+// 	// Clamp the ring
+// 	clamp.set_value(true);
+// 	pros::delay(400);
+// 	clamp.set_value(false);
+
+// 	// Ram into the center
+// 	chassis.moveToPoint(-24, 0, 1000);
+
+// 	// chassis.setPose(12, -60,-40);
+
+// 	// chassis.setPose(-12, -12,0); // Start position: 1 tile from right
+// edge, facing backwards
+// 	// // Move the robot backwards 44 inches
+// 	// chassis.moveToPoint(-12, -44, 2000, {.forwards = false});
+// 	// // Move backwards to (-44, 0) maintaining 0 degree heading
+
+// 	// // pros::delay(1000); // pause for 1 second before activating clamp
+// 	// clamp.set_value(true);
+// 	// pros::delay(1500); // Wait 200ms
+// 	// clamp.set_value(false);
+
+// }
 
 /**
  * Runs the operator control code. This function will be started in its own task
@@ -74,22 +245,124 @@ void autonomous() {}
  * operator control task will be stopped. Re-enabling the robot will restart the
  * task, not resume it from where it left off.
  */
+
+pros::Controller controller(pros::E_CONTROLLER_MASTER);
+
 void opcontrol() {
-	pros::Controller master(pros::E_CONTROLLER_MASTER);
-	pros::MotorGroup left_mg({1, -2, 3});    // Creates a motor group with forwards ports 1 & 3 and reversed port 2
-	pros::MotorGroup right_mg({-4, 5, -6});  // Creates a motor group with forwards port 5 and reversed ports 4 & 6
+  // Store initial arm position
+  int initialArm = arm_encoder.get_value();
 
+  // PID variables for auto-arm control
+  const double Kp = 1.0, Ki = 0.0, Kd = 0.1;
+  static double pidIntegral = 0;
+  static double lastError = 0;
+  static double dt = 0.01; // 10ms for shaft encoder
+  static bool autoArmEnabled = false;
+  static bool autoArmLastY = false;
+  // New: persistent target for auto-arm mode
+  static int autoTargetArm = initialArm + 30;
 
-	while (true) {
-		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
-		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
-		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
+  int arm_initial = arm_encoder.get_value();
 
-		// Arcade control scheme
-		int dir = master.get_analog(ANALOG_LEFT_Y);    // Gets amount forward/backward from left joystick
-		int turn = master.get_analog(ANALOG_RIGHT_X);  // Gets the turn left/right from right joystick
-		left_mg.move(dir - turn);                      // Sets left motor voltage
-		right_mg.move(dir + turn);                     // Sets right motor voltage
-		pros::delay(20);                               // Run for 20 ms then update
-	}
+  // scoreing positin: 110
+  //
+  while (true) {
+
+    // get left y and right x positions
+    int leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+    int rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
+
+    // move the robot
+    chassis.curvature(leftY, rightX);
+
+    // Intake control with L1 (forward) and L2 (reverse)
+    if (controller.get_digital(DIGITAL_R1)) {
+      intake.move(127); // Full speed forward
+      hook.move(-100);  // Full speed forward
+    } else if (controller.get_digital(DIGITAL_R2)) {
+      hook.move(100);    // Full speed forward
+      intake.move(-127); // Full speed reverse
+    } else {
+      hook.move(0);   // Full speed forward
+      intake.move(0); // Stop if neither button is pressed
+    }
+
+    // // hook control with R1 (forward) and R2 (reverse)
+
+    // Auto-arm toggle using Y button
+    bool currentY = controller.get_digital(DIGITAL_Y);
+    if (currentY && !autoArmLastY) {
+      autoArmEnabled = !autoArmEnabled;
+      if (autoArmEnabled)
+        autoTargetArm = initialArm + 40;
+    }
+    autoArmLastY = currentY;
+
+    int currentArm = arm_encoder.get_value();
+
+    // When auto-arm is enabled, use PID (adjust target faster with L buttons)
+    if (autoArmEnabled) {
+      // Adjust the target if L1/L2 is pressed (faster adjustment)
+      if (controller.get_digital(DIGITAL_L1))
+        autoTargetArm += 3; // Increase target faster
+      if (controller.get_digital(DIGITAL_L2))
+        autoTargetArm -= 3; // Decrease target faster
+
+      // PID control to hold the arm at the autoTargetArm position
+      int error = autoTargetArm - currentArm;
+      pidIntegral += error * dt; // dt = 20ms for rotaitonal sensor, we are
+                                 // using 10ms for shaft encoder
+      int derivative = (error - lastError) / dt;
+      int pidOutput =
+          static_cast<int>(Kp * error + Ki * pidIntegral + Kd * derivative);
+      lastError = error;
+      // Clamp output
+      if (pidOutput > 127)
+        pidOutput = 127;
+      if (pidOutput < -127)
+        pidOutput = -127;
+      arm.move(pidOutput);
+    } else // When auto-arm is off, manual control is full (PID is bypassed)
+    {
+      pidIntegral = 0;
+      lastError = 0;
+      if (controller.get_digital(DIGITAL_L1)) {
+        arm.move(60);
+      } else if (controller.get_digital(DIGITAL_L2)) {
+        arm.move(-60);
+      } else {
+        arm.move(0);
+      }
+    }
+
+    // Single-action solenoid control for clamp
+    static bool clamp_state = false;
+    static bool clamp_last_a_state = false;
+    bool clamp_current_a_state = controller.get_digital(DIGITAL_A);
+
+    // Toggle state on button press (not hold)
+    if (clamp_current_a_state && !clamp_last_a_state) {
+      clamp_state = !clamp_state;
+    }
+    clamp_last_a_state = clamp_current_a_state;
+
+    // Set solenoid based on toggled state
+    clamp.set_value(clamp_state);
+
+    // Single-action solenoid control for doinker
+    static bool doinker_state = false;
+    static bool doinker_last_x_state = false;
+    bool doinker_current_x_state = controller.get_digital(DIGITAL_X);
+
+    // Toggle state on button press (not hold)
+    if (doinker_current_x_state && !doinker_last_x_state) {
+      doinker_state = !doinker_state;
+    }
+    doinker_last_x_state = doinker_current_x_state;
+
+    // Set solenoid based on toggled state
+    doinker.set_value(doinker_state);
+
+    pros::delay(20);
+  }
 }
